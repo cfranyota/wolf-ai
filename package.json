@@ -1,0 +1,51 @@
+{
+  "name": "wolfai",
+  "version": "1.0.0",
+  "description": "Wolf AI - Live Real Estate Sales Intelligence",
+  "main": "electron/main.js",
+  "scripts": {
+    "postinstall": "node scripts/patch-electron.js",
+    "dev": "node scripts/patch-electron.js && concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "build:renderer": "vite build",
+    "build": "vite build && electron-builder --mac",
+    "start": "electron ."
+  },
+  "build": {
+    "appId": "com.risegroup.wolfai2",
+    "productName": "Wolf AI",
+    "directories": { "output": "release" },
+    "mac": {
+      "category": "public.app-category.business",
+      "icon": "build/icon.png",
+      "hardenedRuntime": true,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "Wolf AI uses your microphone to transcribe live sales calls.",
+        "NSScreenCaptureDescription": "Wolf AI captures system audio to hear both sides of your calls."
+      },
+      "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }]
+    },
+    "files": [
+      "electron/**/*",
+      "dist/renderer/**/*",
+      "node_modules/audiotee/**/*"
+    ],
+    "asarUnpack": [
+      "node_modules/audiotee/bin/audiotee"
+    ]
+  },
+  "dependencies": {
+    "audiotee": "^0.0.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.0",
+    "concurrently": "^8.2.0",
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "vite": "^5.4.0",
+    "wait-on": "^8.0.0"
+  }
+}
