@@ -22,7 +22,8 @@
       "entitlementsInherit": "entitlements.mac.plist",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "Wolf AI uses your microphone to transcribe live sales calls.",
-        "NSScreenCaptureDescription": "Wolf AI captures system audio to hear both sides of your calls."
+        "NSScreenCaptureDescription": "Wolf AI captures system audio to hear both sides of your calls.",
+        "NSAudioCaptureUsageDescription": "Wolf AI records system audio to hear the other side of your calls."
       },
       "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }]
     },
