@@ -189,3 +189,29 @@ export function IconClose({ size = 16, ...props }) {
     </svg>
   );
 }
+
+export function IconChevronDown({ size = 16, ...props }) {
+  return (
+    <svg width={size} height={size} {...base} {...props}>
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  );
+}
+
+export function IconLayoutFloating({ size = 16, ...props }) {
+  return (
+    <svg width={size} height={size} {...base} {...props}>
+      <rect x="3" y="3" width="11" height="9" rx="1.5" />
+      <rect x="10" y="12" width="11" height="9" rx="1.5" />
+    </svg>
+  );
+}
+
+export function IconLayoutColumn({ size = 16, ...props }) {
+  return (
+    <svg width={size} height={size} {...base} {...props}>
+      <rect x="6" y="3" width="12" height="18" rx="2" />
+      <path d="M6 9h12M6 15h12" />
+    </svg>
+  );
+}

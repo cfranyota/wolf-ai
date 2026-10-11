@@ -816,6 +816,7 @@ body {
   border: 1px solid var(--b2);
   border-radius: 12px;
   width: 440px;
+  max-width: calc(100% - 16px);
   max-height: 80vh;
   overflow-y: auto;
   box-shadow: 0 24px 64px rgba(0,0,0,0.7);
@@ -952,3 +953,110 @@ body {
   from{opacity:0;transform:translateX(-50%) translateY(6px)}
   to{opacity:1;transform:translateX(-50%) translateY(0)}
 }
+
+/* ── One-piece column layout ───────────────────────────────────────────── */
+/* The hub window as a single card: pill bar as the header, every panel stacked below. */
+.column-shell {
+  display: flex;
+  flex-direction: column;
+  margin: 8px;
+  flex: 1;
+  min-height: 0;
+  border-radius: var(--card-radius);
+  background: var(--s1);
+  border: 1px solid var(--card-border);
+  box-shadow: var(--card-shadow);
+  overflow: hidden;
+}
+.column-shell .pill-bar {
+  margin: 0;
+  border: none;
+  border-bottom: 1px solid var(--b1);
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.column-shell .pill-select { min-width: 0; flex-shrink: 1; text-overflow: ellipsis; }
+.column-shell .pill-overflow-menu {
+  margin: 0;
+  border: none;
+  border-bottom: 1px solid var(--b1);
+  border-radius: 0;
+  box-shadow: none;
+  background: var(--s2);
+}
+
+.column-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.column-checklist {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--b1);
+}
+.column-checklist .flyout-tab-content { flex: none; padding: 8px 12px; overflow: visible; }
+.column-checklist .script-empty { padding: 0; text-align: left; font-size: 11px; }
+
+.column-section {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  min-height: 0;
+  border-bottom: 1px solid var(--b1);
+}
+.column-section.open { flex: 1 1 0; }
+.column-section-hdr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 12px;
+  border: none;
+  background: var(--s2);
+  color: var(--t2);
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+.column-section-hdr:hover { color: var(--t1); }
+.column-section.open .column-section-hdr { border-bottom: 1px solid var(--b1); }
+.column-chevron { flex-shrink: 0; transform: rotate(-90deg); transition: transform 0.15s; }
+.column-section.open .column-chevron { transform: none; }
+.column-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.column-section-summary {
+  flex: 1;
+  min-width: 0;
+  text-align: right;
+  font-size: 11px;
+  color: var(--t3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.column-section-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* The transcript's own body and input row already carry padding; drop the outer inset
+   the floating window uses so the lines get the full column width. */
+.column-section .transcript-tab { padding: 0; overflow: hidden; }
+.column-style-picker { display: flex; flex-direction: column; flex-shrink: 0; }
+.column-style-picker .mode-btn-row { border-top: none; }
+.column-style-picker .style-btn-row { border-bottom: 1px solid var(--b1); }
+
+/* The last section already draws the divider above the pinned coach controls. */
+.column-body > .assist-footer { border-top: none; }
+
+.layout-column .error-toast { top: 64px; bottom: auto; max-width: calc(100% - 32px); }

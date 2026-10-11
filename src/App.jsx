@@ -1,6 +1,7 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { CALL_SCRIPTS, LEAD_CONTEXT, FILLERS, buildSystemPrompt, buildCoachPrompt, buildAutoStyleHint, COACHING_CONFIG, BUYER_CLARIFYING, SELLER_CLARIFYING, BUYER_SCRIPT_KEYS, SELLER_SCRIPT_KEYS, STYLE_SCRIPTS } from './scripts.js';
-import { IconMic, IconSparkle, IconCheck, IconClipboard, IconMore, IconGear, IconClose, IconWaveform, IconRefresh, IconSun, IconMoon } from './icons.jsx';
+import { IconMic, IconSparkle, IconCheck, IconClipboard, IconMore, IconGear, IconClose, IconWaveform, IconRefresh, IconSun, IconMoon, IconLayoutFloating, IconLayoutColumn } from './icons.jsx';
+import { ColumnLayout } from './panels.jsx';
 
 const PROXY  = 'http://localhost:8765/proxy';
 const OLLAMA = 'http://localhost:8765/ollama';
@@ -135,6 +136,10 @@ export default function App() {
   const [autoMode,      setAutoMode]      = useState(false);
   const [theme,         setTheme]         = useState(() => localStorage.getItem('wolf_theme') || 'dark');
   const [openWindows,   setOpenWindows]   = useState({ transcript: false, assist: false, checklist: false, script: false });
+  // 'floating' = pill + separate content windows; 'column' = everything in this one window.
+  // Deliberately not persisted: the app always opens in floating.
+  const [layoutMode,    setLayoutMode]    = useState('floating');
+  const [columnSnapshot, setColumnSnapshot] = useState({});
   const [settings,      setSettings]      = useState(() => ({
     deepgramKey : localStorage.getItem('wolf_dg_key')       || '',
     claudeKey   : localStorage.getItem('wolf_claude_key')   || '',
@@ -172,6 +177,7 @@ export default function App() {
   const loadingModeRef  = useRef(null);
   const autoTimerRef    = useRef(null);
   const lastAutoRef     = useRef(0);
+  const layoutModeRef   = useRef('floating');
 
   useEffect(() => { settingsRef.current = settings; }, [settings]);
   useEffect(() => { currentScriptRef.current = currentScript; }, [currentScript]);
@@ -209,12 +215,21 @@ export default function App() {
     localStorage.setItem('wolf_theme', theme);
   }, [theme]);
 
+  // Tell main which shape this window should take. Runs on mount too, so a renderer
+  // reload (which resets layoutMode to floating) pulls the OS window back with it.
+  useEffect(() => {
+    layoutModeRef.current = layoutMode;
+    window.electronAPI?.setLayoutMode(layoutMode);
+  }, [layoutMode]);
+
   // Grow/shrink the pill's own OS window to fit the Settings modal or the overflow menu.
+  // In column mode the window is already large and user-sized, so both render in place.
   useEffect(() => {
     if (!window.electronAPI) return;
-    const height = showSettings ? 640 : showMenu ? 168 : 60;
+    if (layoutMode === 'column') return;
+    const height = showSettings ? 640 : showMenu ? 224 : 60;
     window.electronAPI.resizeWindow({ width: 560, height });
-  }, [showSettings, showMenu]);
+  }, [showSettings, showMenu, layoutMode]);
 
   // Track which content windows main process currently has open, for the pill's toggle icons.
   useEffect(() => {
@@ -224,25 +239,32 @@ export default function App() {
 
   // Broadcast a state snapshot to any open content windows at a fixed 10Hz rate
   // (not reactively on every change — micLevel/sysLevel update ~60x/sec and would flood IPC).
-  const broadcastRef = useRef(null);
+  // The same snapshot also feeds the one-piece column layout, on the same 10Hz tick, so
+  // its panels re-render at the rate the floating windows do rather than on every frame.
+  // Memoized so an unchanged snapshot keeps its identity and the tick is then a no-op.
+  const hubState = useMemo(() => ({
+    theme, currentScript, effectiveStyle, coachStyle, promptMode,
+    finalLines, leadInterim, agentInterim, isListening, sysActive, micLevel, sysLevel,
+    coachCards, autoMode, loadingMode, lpmamaChecked, lpmamaCopied,
+  }), [
+    theme, currentScript, effectiveStyle, coachStyle, promptMode,
+    finalLines, leadInterim, agentInterim, isListening, sysActive, micLevel, sysLevel,
+    coachCards, autoMode, loadingMode, lpmamaChecked, lpmamaCopied,
+  ]);
+  const broadcastRef = useRef(hubState);
+  useEffect(() => { broadcastRef.current = hubState; }, [hubState]);
   useEffect(() => {
-    broadcastRef.current = {
-      theme, currentScript, effectiveStyle, coachStyle, promptMode,
-      finalLines, leadInterim, agentInterim, isListening, sysActive, micLevel, sysLevel,
-      coachCards, autoMode, loadingMode, lpmamaChecked, lpmamaCopied,
-    };
-  });
-  useEffect(() => {
-    if (!window.electronAPI) return;
     const id = setInterval(() => {
-      if (broadcastRef.current) window.electronAPI.broadcastState(broadcastRef.current);
+      window.electronAPI?.broadcastState(broadcastRef.current);
+      if (layoutModeRef.current === 'column') setColumnSnapshot(broadcastRef.current);
     }, 100);
     return () => clearInterval(id);
   }, []);
 
-  // Actions dispatched from content windows land here and call the real hub handlers.
-  // Handlers are read from a ref (kept fresh every render) so this listener never needs
-  // to resubscribe, same pattern as the settings/currentScript/autoMode refs above.
+  // Actions from the panels land here and call the real hub handlers, whether they
+  // arrive over IPC from a floating content window or directly from the column layout.
+  // Handlers are read from a ref (kept fresh every render) so runAction stays stable
+  // and the IPC listener never needs to resubscribe, same pattern as the refs above.
   const actionHandlersRef = useRef(null);
   useEffect(() => {
     actionHandlersRef.current = {
@@ -252,23 +274,30 @@ export default function App() {
       copyLpmama,
     };
   });
+  const runAction = useCallback((action) => {
+    const h = actionHandlersRef.current;
+    if (!h) return;
+    switch (action.type) {
+      case 'submitManual':   h.submitManual(action.text); break;
+      case 'setPromptMode':  h.setPromptMode(action.value); break;
+      case 'setCoachStyle':  h.setCoachStyle(action.value); break;
+      case 'triggerCoach':   h.triggerCoach(action.mode); break;
+      case 'triggerChat':    h.triggerChat(action.question); break;
+      case 'toggleAutoMode': h.toggleAutoMode(); break;
+      case 'toggleLpmama':   h.toggleLpmama(action.key); break;
+      case 'copyLpmama':     h.copyLpmama(); break;
+      default: break;
+    }
+  }, []);
   useEffect(() => {
     if (!window.electronAPI) return;
-    window.electronAPI.onDispatch((action) => {
-      const h = actionHandlersRef.current;
-      if (!h) return;
-      switch (action.type) {
-        case 'submitManual':   h.submitManual(action.text); break;
-        case 'setPromptMode':  h.setPromptMode(action.value); break;
-        case 'setCoachStyle':  h.setCoachStyle(action.value); break;
-        case 'triggerCoach':   h.triggerCoach(action.mode); break;
-        case 'triggerChat':    h.triggerChat(action.question); break;
-        case 'toggleAutoMode': h.toggleAutoMode(); break;
-        case 'toggleLpmama':   h.toggleLpmama(action.key); break;
-        case 'copyLpmama':     h.copyLpmama(); break;
-        default: break;
-      }
-    });
+    window.electronAPI.onDispatch(runAction);
+  }, [runAction]);
+
+  const changeLayout = useCallback((mode) => {
+    setColumnSnapshot(broadcastRef.current);
+    setLayoutMode(mode);
+    setShowMenu(false);
   }, []);
 
   useEffect(() => () => { stopDgSession(); stopMic(); stopSysAudioCapture(); stopTimer(); }, []);
@@ -297,8 +326,6 @@ export default function App() {
     setAgentInterim('');
     setCoachCards([]);
     setLpmamaChecked({ L: false, P: false, M: false, A: false, Ma: false, Ap: false });
-    setManualText('');
-    setChatQuestion('');
     setErrorMsg('');
     setElapsed('00:00');
     finalLinesRef.current = [];
@@ -802,26 +829,37 @@ export default function App() {
     : null;
 
   // ── Render ─────────────────────────────────────────────────────────────────
+  const pillBar = (
+    <PillBar
+      currentScript={currentScript}
+      onScriptChange={v => { setCurrentScript(v); setAutoMode(false); }}
+      isListening={isListening}
+      toggleMic={toggleMic}
+      sysActive={sysActive}
+      toggleSys={toggleSys}
+      elapsed={elapsed}
+      running={!!callStartRef.current}
+      clearCall={clearCall}
+      openWindows={openWindows}
+      onToggleWindow={view => window.electronAPI?.toggleWindow(view)}
+      theme={theme}
+      setTheme={setTheme}
+      setShowSettings={setShowSettings}
+      showMenu={showMenu}
+      setShowMenu={setShowMenu}
+      layoutMode={layoutMode}
+      onLayoutChange={changeLayout}
+    />
+  );
+
   return (
-    <div className="app">
-      <PillBar
-        currentScript={currentScript}
-        onScriptChange={v => { setCurrentScript(v); setAutoMode(false); }}
-        isListening={isListening}
-        toggleMic={toggleMic}
-        sysActive={sysActive}
-        toggleSys={toggleSys}
-        elapsed={elapsed}
-        running={!!callStartRef.current}
-        clearCall={clearCall}
-        openWindows={openWindows}
-        onToggleWindow={view => window.electronAPI?.toggleWindow(view)}
-        theme={theme}
-        setTheme={setTheme}
-        setShowSettings={setShowSettings}
-        showMenu={showMenu}
-        setShowMenu={setShowMenu}
-      />
+    <div className={`app${layoutMode === 'column' ? ' layout-column' : ''}`}>
+      {layoutMode === 'column' ? (
+        <div className="column-shell">
+          {pillBar}
+          <ColumnLayout state={columnSnapshot} dispatch={runAction} />
+        </div>
+      ) : pillBar}
 
 
       {/* Settings modal */}
@@ -847,12 +885,17 @@ const WINDOW_TOGGLES = [
   { key: 'script',     label: 'Script',     icon: IconClipboard, accent: 'var(--blue)',   accentDim: 'var(--blue-dim)'   },
 ];
 
+const LAYOUT_MODES = [
+  { key: 'floating', label: 'Floating', icon: IconLayoutFloating, title: 'Pill with separate floating windows' },
+  { key: 'column',   label: 'Column',   icon: IconLayoutColumn,   title: 'Everything in one window' },
+];
+
 function PillBar({
   currentScript, onScriptChange,
   isListening, toggleMic, sysActive, toggleSys,
   elapsed, running,
   clearCall, openWindows, onToggleWindow, theme, setTheme, setShowSettings,
-  showMenu, setShowMenu,
+  showMenu, setShowMenu, layoutMode, onLayoutChange,
 }) {
   const menuRef       = useRef(null);
   const menuToggleRef = useRef(null);
@@ -942,97 +985,43 @@ function PillBar({
               <span className="pill-overflow-chip-label">Theme</span>
             </button>
           </div>
+          {/* Window toggles only apply to floating mode; in column every panel is already here. */}
+          {layoutMode !== 'column' && (
+            <div className="pill-overflow-row">
+              {WINDOW_TOGGLES.map(t => {
+                const Icon = t.icon;
+                return (
+                  <button
+                    key={t.key}
+                    className={`pill-overflow-chip${openWindows?.[t.key] ? ' active' : ''}`}
+                    onClick={() => onToggleWindow(t.key)}
+                    title={`${openWindows?.[t.key] ? 'Close' : 'Open'} ${t.label}`}
+                  >
+                    <Icon size={15} />
+                    <span className="pill-overflow-chip-label">{t.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <div className="pill-overflow-row">
-            {WINDOW_TOGGLES.map(t => {
-              const Icon = t.icon;
+            {LAYOUT_MODES.map(m => {
+              const Icon = m.icon;
               return (
                 <button
-                  key={t.key}
-                  className={`pill-overflow-chip${openWindows?.[t.key] ? ' active' : ''}`}
-                  onClick={() => onToggleWindow(t.key)}
-                  title={`${openWindows?.[t.key] ? 'Close' : 'Open'} ${t.label}`}
+                  key={m.key}
+                  className={`pill-overflow-chip${layoutMode === m.key ? ' active' : ''}`}
+                  onClick={() => onLayoutChange(m.key)}
+                  title={m.title}
                 >
                   <Icon size={15} />
-                  <span className="pill-overflow-chip-label">{t.label}</span>
+                  <span className="pill-overflow-chip-label">{m.label}</span>
                 </button>
               );
             })}
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-export function CoachCard({ card, config }) {
-  return (
-    <div className="coach-card">
-      <div className="coach-card-hdr">
-        <span className="card-badge" style={{ '--accent': config.color, '--accent-dim': config.colorDim || 'var(--s3)' }}>
-          {config.icon ? <config.icon size={14} /> : '3A'}
-        </span>
-        <span className="coach-card-hdr-label">{config.label}</span>
-        {card.auto && <span className="auto-badge">auto</span>}
-        <span className="coach-card-time">{card.time}</span>
-      </div>
-      <div className="coach-card-body">
-        {card.status === 'streaming' && (
-          card.streamText
-            ? <div className="stream-text">{card.streamText}</div>
-            : <div className="filler-text"><div className="spinner" style={{ color: config.color }} />{card.filler}</div>
-        )}
-        {card.status === 'loading' && (
-          <div className="filler-text">
-            <div className="spinner" style={{ color: config.color }} />
-            {card.filler}
-          </div>
-        )}
-        {card.status === 'error' && (
-          <div style={{ color: 'var(--red)', fontSize: 12 }}>Error: {card.error}</div>
-        )}
-        {card.status === 'done' && card.sections.map((sec, i) => {
-          if (sec.type === 'context') return <div key={i} className="coach-context">{sec.text}</div>;
-          if (sec.type === 'option')  return (
-            <div key={i} className="coach-option">
-              <div className="coach-option-label">Option {sec.num}{sec.tag ? ` · ${sec.tag}` : ''}</div>
-              <div className="coach-option-text">{sec.lines.join(' ')}</div>
-            </div>
-          );
-          if (sec.type === 'note') return (
-            <div key={i} className="coach-note">
-              <strong>Coach:</strong> {sec.text}
-            </div>
-          );
-          if (sec.type === 'raw') return (
-            <div key={i} style={{ fontSize: 12.5, color: 'var(--t1)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
-              {sec.text}
-            </div>
-          );
-          return null;
-        })}
-      </div>
-    </div>
-  );
-}
-
-export function LevelMeter({ level, bars = 7, color = 'var(--green)' }) {
-  return (
-    <div className="level-meter">
-      {Array.from({ length: bars }, (_, i) => {
-        const threshold = i / bars;
-        const active    = level > threshold;
-        const barColor  = i >= bars * 0.75 ? 'var(--red)' : i >= bars * 0.5 ? 'var(--yellow)' : color;
-        return (
-          <div
-            key={i}
-            className="level-bar"
-            style={{
-              height:     active ? `${4 + (i / bars) * 10}px` : '2px',
-              background: active ? barColor : 'var(--b2)',
-            }}
-          />
-        );
-      })}
     </div>
   );
 }

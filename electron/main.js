@@ -318,6 +318,8 @@ let audioteeProcess = null;
 let mainWindow = null;
 const contentWindows = {}; // 'transcript' | 'assist' | 'checklist' | 'script' -> BrowserWindow
 const CONTENT_VIEWS = ['transcript', 'assist', 'checklist', 'script'];
+let layoutMode = 'floating';    // 'floating' | 'column' — mirrors the hub renderer's layoutMode
+let viewsOpenBeforeColumn = []; // content windows to reopen when the hub leaves column mode
 
 function getAudioteeBinary() {
   if (app.isPackaged) {
@@ -399,16 +401,14 @@ ipcMain.handle('copy-to-clipboard', (_e, text) => {
   return { ok: true };
 });
 
-ipcMain.handle('resize-window', (_e, { width, height }) => {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  width  = Math.round(width);
-  height = Math.round(height);
-
-  // Growing the pill into the flyout must never let the window run off the
-  // bottom/right of the screen under the Dock/menu bar — keep the top-left
-  // corner fixed and only nudge the window back on-screen if it would.
+// Resize the hub window in place. Growing it must never let the window run off
+// the bottom/right of the screen under the Dock/menu bar — keep the top-left
+// corner fixed and only nudge the window back on-screen if it would.
+function setHubSize(width, height) {
   const [x, y] = mainWindow.getPosition();
   const work = screen.getDisplayNearestPoint({ x, y }).workArea;
+  width  = Math.min(Math.round(width),  work.width);
+  height = Math.min(Math.round(height), work.height);
   const newX = Math.min(x, work.x + work.width  - width);
   const newY = Math.min(y, work.y + work.height - height);
 
@@ -418,6 +418,42 @@ ipcMain.handle('resize-window', (_e, { width, height }) => {
     width,
     height,
   }, true);
+}
+
+ipcMain.handle('resize-window', (_e, { width, height }) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  // In column mode the hub is user-sized; the pill's fit-to-menu resizes don't apply.
+  if (layoutMode === 'column') return;
+  setHubSize(width, height);
+});
+
+// Hub layout: 'floating' is the pill plus separate content windows; 'column' turns the
+// hub itself into one resizable window holding every panel.
+ipcMain.handle('set-layout-mode', (_e, mode) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mode !== 'floating' && mode !== 'column') return;
+  if (mode === layoutMode) return;
+  layoutMode = mode;
+
+  if (mode === 'column') {
+    viewsOpenBeforeColumn = CONTENT_VIEWS.filter(v => contentWindows[v] && !contentWindows[v].isDestroyed());
+    for (const view of viewsOpenBeforeColumn) contentWindows[view].close();
+
+    const saved = loadAllBounds().column;
+    const size = saved && Number.isFinite(saved.width) && Number.isFinite(saved.height) ? saved : COLUMN_DEFAULT_SIZE;
+    mainWindow.setResizable(true);
+    mainWindow.setMinimumSize(COLUMN_MIN_SIZE.width, COLUMN_MIN_SIZE.height);
+    setHubSize(size.width, size.height);
+  } else {
+    mainWindow.setMinimumSize(0, 0);
+    setHubSize(PILL_W, PILL_H);
+    mainWindow.setResizable(false);
+    const [x, y] = mainWindow.getPosition();
+    saveBounds('pill', { x, y });
+
+    for (const view of viewsOpenBeforeColumn) createContentWindow(view);
+    viewsOpenBeforeColumn = [];
+  }
 });
 
 ipcMain.handle('quit-app', () => { app.quit(); });
@@ -477,6 +513,8 @@ ipcMain.handle('test-sys-audio', async () => {
 // ─── Window ───────────────────────────────────────────────────────────────────
 
 const PILL_W = 560, PILL_H = 60;
+const COLUMN_DEFAULT_SIZE = { width: 400, height: 820 };
+const COLUMN_MIN_SIZE     = { width: 360, height: 420 };
 const BOUNDS_FILE = path.join(app.getPath('userData'), 'window-bounds.json');
 
 const DEFAULT_CONTENT_SIZE = {
@@ -547,16 +585,26 @@ function createWindow() {
     return { action: 'deny' };
   });
 
+  // The pill remembers where it sits; the column remembers the size it was dragged to.
+  // Kept under separate keys so a column parked at a screen edge never becomes the
+  // launch position of the (wider) pill.
   let saveTimer = null;
-  mainWindow.on('moved', () => {
+  const scheduleSave = () => {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      if (layoutMode === 'column') {
+        saveBounds('column', mainWindow.getBounds());
+      } else {
         const [x, y] = mainWindow.getPosition();
         saveBounds('pill', { x, y });
       }
     }, 300);
-  });
+  };
+  mainWindow.on('moved', scheduleSave);
+  // 'resize', not 'resized': the latter only fires for some user-driven resizes on macOS,
+  // and the debounce above already collapses the stream of events into one save.
+  mainWindow.on('resize', scheduleSave);
 
   mainWindow.on('closed', () => { mainWindow = null; });
 }

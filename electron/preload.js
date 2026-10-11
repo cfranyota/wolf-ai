@@ -22,5 +22,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   dispatch: (action) => ipcRenderer.send('dispatch', action),
   onDispatch: (cb) => ipcRenderer.on('dispatch', (_e, a) => cb(a)),
   toggleWindow: (view) => ipcRenderer.invoke('toggle-window', view),
+  setLayoutMode: (mode) => ipcRenderer.invoke('set-layout-mode', mode),
   onOpenWindows: (cb) => ipcRenderer.on('open-windows', (_e, open) => cb(open)),
 });
