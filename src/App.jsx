@@ -1,7 +1,8 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { CALL_SCRIPTS, LEAD_CONTEXT, FILLERS, buildSystemPrompt, buildCoachPrompt, buildAutoStyleHint, COACHING_CONFIG, BUYER_CLARIFYING, SELLER_CLARIFYING, BUYER_SCRIPT_KEYS, SELLER_SCRIPT_KEYS, STYLE_SCRIPTS } from './scripts.js';
-import { IconMic, IconSparkle, IconCheck, IconClipboard, IconMore, IconGear, IconClose, IconWaveform, IconRefresh, IconSun, IconMoon, IconLayoutFloating, IconLayoutColumn } from './icons.jsx';
+import { CALL_SCRIPTS, LEAD_CONTEXT, FILLERS, buildSystemPrompt, buildCoachPrompt, buildAutoStyleHint, buildEcoPrompt, COACHING_CONFIG, BUYER_CLARIFYING, SELLER_CLARIFYING, BUYER_SCRIPT_KEYS, SELLER_SCRIPT_KEYS, STYLE_SCRIPTS } from './scripts.js';
+import { IconMic, IconSparkle, IconCheck, IconClipboard, IconMore, IconGear, IconClose, IconWaveform, IconRefresh, IconSun, IconMoon, IconLayoutFloating, IconLayoutColumn, IconLayoutEco } from './icons.jsx';
 import { ColumnLayout } from './panels.jsx';
+import EcoLayout from './EcoLayout.jsx';
 
 const PROXY  = 'http://localhost:8765/proxy';
 const OLLAMA = 'http://localhost:8765/ollama';
@@ -98,6 +99,25 @@ function parseResponse(text) {
   return sections;
 }
 
+// ── Eco line cleanup ──────────────────────────────────────────────────────────
+// Eco asks the model for one bare line, but a reply can still arrive with quotes, an
+// "OPTION 1" label or a whole card of options. Reduce whatever came back to the first
+// speakable line.
+const ECO_WIDTH = 620;
+function cleanEcoLine(text) {
+  for (const raw of (text || '').split('\n')) {
+    let line = raw.trim();
+    if (!line) continue;
+    if (/^(COACH\s+NOTE|CALL STAGE|OBJECTION DETECTED|REFRAME CONTEXT|CLOSE STRATEGY|MOTIVATION FOCUS)\b/i.test(line)) continue;
+    line = line
+      .replace(/^OPTION\s+\d+\s*(\[[^\]]*\])?[\s:.\-–]*/i, '')
+      .replace(/^["“”'‘’]+|["“”'‘’]+$/g, '')
+      .trim();
+    if (line) return line;
+  }
+  return '';
+}
+
 // ── Filler helper ─────────────────────────────────────────────────────────────
 function randomFiller(mode) {
   const list = FILLERS[mode] || FILLERS.question;
@@ -136,10 +156,13 @@ export default function App() {
   const [autoMode,      setAutoMode]      = useState(false);
   const [theme,         setTheme]         = useState(() => localStorage.getItem('wolf_theme') || 'dark');
   const [openWindows,   setOpenWindows]   = useState({ transcript: false, assist: false, checklist: false, script: false });
-  // 'floating' = pill + separate content windows; 'column' = everything in this one window.
+  // 'floating' = pill + separate content windows; 'column' = everything in this one window;
+  // 'eco' = one compact bar showing a single line to say.
   // Deliberately not persisted: the app always opens in floating.
   const [layoutMode,    setLayoutMode]    = useState('floating');
   const [columnSnapshot, setColumnSnapshot] = useState({});
+  const [ecoLine,       setEcoLine]       = useState({ text: '', status: 'idle' });
+  const [ecoHeight,     setEcoHeight]     = useState(180);
   const [settings,      setSettings]      = useState(() => ({
     deepgramKey : localStorage.getItem('wolf_dg_key')       || '',
     claudeKey   : localStorage.getItem('wolf_claude_key')   || '',
@@ -178,12 +201,15 @@ export default function App() {
   const autoTimerRef    = useRef(null);
   const lastAutoRef     = useRef(0);
   const layoutModeRef   = useRef('floating');
+  const ecoLineRef      = useRef(ecoLine);
+  const ecoBusyRef      = useRef(false);
 
   useEffect(() => { settingsRef.current = settings; }, [settings]);
   useEffect(() => { currentScriptRef.current = currentScript; }, [currentScript]);
   useEffect(() => { finalLinesRef.current = finalLines; }, [finalLines]);
   useEffect(() => { autoModeRef.current = autoMode; }, [autoMode]);
   useEffect(() => { loadingModeRef.current = loadingMode; }, [loadingMode]);
+  useEffect(() => { ecoLineRef.current = ecoLine; }, [ecoLine]);
 
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -224,12 +250,18 @@ export default function App() {
 
   // Grow/shrink the pill's own OS window to fit the Settings modal or the overflow menu.
   // In column mode the window is already large and user-sized, so both render in place.
+  // In eco mode the window follows the bar's measured height (it grows with an open
+  // panel or a wrapped line).
   useEffect(() => {
     if (!window.electronAPI) return;
     if (layoutMode === 'column') return;
+    if (layoutMode === 'eco') {
+      window.electronAPI.resizeWindow({ width: ECO_WIDTH, height: showSettings ? 640 : ecoHeight });
+      return;
+    }
     const height = showSettings ? 640 : showMenu ? 224 : 60;
     window.electronAPI.resizeWindow({ width: 560, height });
-  }, [showSettings, showMenu, layoutMode]);
+  }, [showSettings, showMenu, layoutMode, ecoHeight]);
 
   // Track which content windows main process currently has open, for the pill's toggle icons.
   useEffect(() => {
@@ -294,6 +326,14 @@ export default function App() {
     window.electronAPI.onDispatch(runAction);
   }, [runAction]);
 
+  // Eco's style pill folds the Full/Condensed switch and the three named styles into
+  // one choice: '' (mixed) | 'nepq' | 'reverse' | 'straightline' | 'condensed'.
+  const changeStyle = useCallback((value) => {
+    if (value === 'condensed') { setPromptMode('condensed'); return; }
+    setPromptMode('full');
+    setCoachStyle(value || null);
+  }, []);
+
   const changeLayout = useCallback((mode) => {
     setColumnSnapshot(broadcastRef.current);
     setLayoutMode(mode);
@@ -325,6 +365,7 @@ export default function App() {
     setLeadInterim('');
     setAgentInterim('');
     setCoachCards([]);
+    setEcoLine({ text: '', status: 'idle' });
     setLpmamaChecked({ L: false, P: false, M: false, A: false, Ma: false, Ap: false });
     setErrorMsg('');
     setElapsed('00:00');
@@ -768,14 +809,59 @@ export default function App() {
     } catch { /* ignore */ }
   }, [callAI, effectiveStyle]);
 
+  // ── Eco mode: one line to say ──────────────────────────────────────────────
+  // kind: 'suggest' | 'retry' | 'deeper' (pressed by the user, streamed into the bar) or
+  // 'auto' (fired after the lead speaks; silent, and may decide no line is needed).
+  const triggerEco = useCallback(async (kind) => {
+    const isAuto = kind === 'auto';
+    const { aiEngine, claudeKey, autoSpeed } = settingsRef.current;
+    const missingKey = aiEngine === 'claude' && !claudeKey;
+    if (ecoBusyRef.current) return;
+    if (isAuto) {
+      if (missingKey || !autoModeRef.current || Date.now() - lastAutoRef.current < autoCooldownMs(autoSpeed)) return;
+    } else if (missingKey) {
+      setErrorMsg('Add your Claude API key in Settings ⚙'); setShowSettings(true); return;
+    }
+
+    const lastLines = getLastLines();
+    if (isAuto && !lastLines) return;
+    const leadCtx = LEAD_CONTEXT[currentScriptRef.current] || LEAD_CONTEXT[''];
+    const system  = buildSystemPrompt(aiEngine);
+    const user    = buildEcoPrompt(kind, lastLines, leadCtx, effectiveStyle, ecoLineRef.current.text);
+    const settle  = prev => ({ text: prev.text, status: prev.text ? 'done' : 'idle' });
+
+    ecoBusyRef.current = true;
+    try {
+      if (isAuto) {
+        const line = cleanEcoLine(await callAI(system, user, 90));
+        if (!line || /^none\b/i.test(line.replace(/\*/g, '')) || !autoModeRef.current) return;
+        lastAutoRef.current = Date.now();
+        setEcoLine({ text: line, status: 'done' });
+      } else {
+        setEcoLine(prev => ({ text: prev.text, status: 'loading' }));
+        const text = await callAIStream(system, user, 90, (partial) => {
+          const line = cleanEcoLine(partial);
+          if (line) setEcoLine({ text: line, status: 'streaming' });
+        });
+        const line = cleanEcoLine(text);
+        setEcoLine(line ? { text: line, status: 'done' } : settle);
+      }
+    } catch (err) {
+      if (!isAuto) { setErrorMsg('AI error: ' + err.message); setEcoLine(settle); }
+    } finally {
+      ecoBusyRef.current = false;
+    }
+  }, [callAI, callAIStream, getLastLines, effectiveStyle]);
+
   useEffect(() => {
     if (!autoMode) { clearTimeout(autoTimerRef.current); return; }
     const last = finalLines[finalLines.length - 1];
     if (!last || last.speaker !== 'lead') return;
     clearTimeout(autoTimerRef.current);
-    autoTimerRef.current = setTimeout(triggerAutoCoach, autoDebounceMs(settingsRef.current.autoSpeed));
+    const run = layoutMode === 'eco' ? () => triggerEco('auto') : triggerAutoCoach;
+    autoTimerRef.current = setTimeout(run, autoDebounceMs(settingsRef.current.autoSpeed));
     return () => clearTimeout(autoTimerRef.current);
-  }, [finalLines, autoMode, triggerAutoCoach]);
+  }, [finalLines, autoMode, triggerAutoCoach, triggerEco, layoutMode]);
 
   // ── Chat Q&A ───────────────────────────────────────────────────────────────
   const triggerChat = useCallback(async (question) => {
@@ -853,12 +939,40 @@ export default function App() {
   );
 
   return (
-    <div className={`app${layoutMode === 'column' ? ' layout-column' : ''}`}>
+    <div className={`app${layoutMode === 'floating' ? '' : ` layout-${layoutMode}`}`}>
       {layoutMode === 'column' ? (
         <div className="column-shell">
           {pillBar}
           <ColumnLayout state={columnSnapshot} dispatch={runAction} />
         </div>
+      ) : layoutMode === 'eco' ? (
+        <EcoLayout
+          ecoLine={ecoLine}
+          onSuggest={() => triggerEco('suggest')}
+          onRetry={() => triggerEco('retry')}
+          onDeeper={() => triggerEco('deeper')}
+          elapsed={elapsed}
+          isListening={isListening}
+          toggleMic={toggleMic}
+          sysActive={sysActive}
+          toggleSys={toggleSys}
+          micLevel={micLevel}
+          sysLevel={sysLevel}
+          autoMode={autoMode}
+          onToggleAuto={() => setAutoMode(v => !v)}
+          effectiveStyle={effectiveStyle}
+          onStyleChange={changeStyle}
+          currentScript={currentScript}
+          onScriptChange={v => { setCurrentScript(v); setAutoMode(false); }}
+          clearCall={clearCall}
+          theme={theme}
+          setTheme={setTheme}
+          setShowSettings={setShowSettings}
+          layoutMode={layoutMode}
+          layoutModes={LAYOUT_MODES}
+          onLayoutChange={changeLayout}
+          onHeight={setEcoHeight}
+        />
       ) : pillBar}
 
 
@@ -888,6 +1002,7 @@ const WINDOW_TOGGLES = [
 const LAYOUT_MODES = [
   { key: 'floating', label: 'Floating', icon: IconLayoutFloating, title: 'Pill with separate floating windows' },
   { key: 'column',   label: 'Column',   icon: IconLayoutColumn,   title: 'Everything in one window' },
+  { key: 'eco',      label: 'Eco',      icon: IconLayoutEco,      title: 'One compact bar with a single line to say' },
 ];
 
 function PillBar({

@@ -207,6 +207,51 @@ export function IconLayoutFloating({ size = 16, ...props }) {
   );
 }
 
+export function IconLayoutEco({ size = 16, ...props }) {
+  return (
+    <svg width={size} height={size} {...base} {...props}>
+      <rect x="2.5" y="7" width="19" height="10" rx="5" />
+      <path d="M7 12h6" />
+    </svg>
+  );
+}
+
+// Solid four-point star, used for Eco's Suggest button.
+export function IconStar4({ size = 16, ...props }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" {...props}>
+      <path d="M12 2.5c.5 4.9 2.1 6.5 9.5 9.5-7.4 3-9 4.6-9.5 9.5-.5-4.9-2.1-6.5-9.5-9.5 7.4-3 9-4.6 9.5-9.5Z" />
+    </svg>
+  );
+}
+
+export function IconUser({ size = 16, ...props }) {
+  return (
+    <svg width={size} height={size} {...base} {...props}>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4.5 20.5a7.5 7.5 0 0 1 15 0" />
+    </svg>
+  );
+}
+
+export function IconFile({ size = 16, ...props }) {
+  return (
+    <svg width={size} height={size} {...base} {...props}>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+      <path d="M14 3v5h5M9 13h6M9 17h4" />
+    </svg>
+  );
+}
+
+export function IconSearch({ size = 16, ...props }) {
+  return (
+    <svg width={size} height={size} {...base} {...props}>
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m20 20-4.2-4.2" />
+    </svg>
+  );
+}
+
 export function IconLayoutColumn({ size = 16, ...props }) {
   return (
     <svg width={size} height={size} {...base} {...props}>

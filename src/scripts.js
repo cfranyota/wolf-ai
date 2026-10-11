@@ -1440,6 +1440,43 @@ export function buildAutoStyleHint(style) {
   return '';
 }
 
+// ── Eco mode: one line to say ────────────────────────────────────────────────
+// Eco shows a single line instead of a card of options, so it gets its own prompt
+// (and its own style hints — the ones above are worded for multi-option output).
+function ecoStyleHint(style) {
+  if (style === 'condensed')    return 'Make it a short 3-8 word ad-lib cue Casey can build on, not a full sentence.';
+  if (style === 'nepq')         return 'Phrase it using NEPQ: slow, curious, one question, ellipses for pauses.';
+  if (style === 'reverse')      return 'Phrase it using Reverse Selling: detached posture, no-oriented or reverse-presumptive framing.';
+  if (style === 'straightline') return 'Phrase it using Straight Line: confident, assumptive, looping back toward the close.';
+  return 'Use whichever of NEPQ, Reverse Selling, Mike Ferry or Straight Line fits this moment best.';
+}
+
+// kind: 'suggest' | 'retry' | 'deeper' | 'auto'. `auto` may answer NONE when the
+// lead's last line doesn't call for a response yet.
+export function buildEcoPrompt(kind, lastLines, leadCtx, style, previousLine) {
+  const best = 'Give the single best thing for Casey to say next.';
+  let task;
+  switch (kind) {
+    case 'retry':
+      task = previousLine ? `Give a different line from this one, taking another angle: "${previousLine}"` : best;
+      break;
+    case 'deeper':
+      task = 'Give one deeper follow-up question that digs into the real reason behind what the lead just said.' +
+        (previousLine ? ` Go further than this line: "${previousLine}"` : '');
+      break;
+    case 'auto':
+      task = `If the lead's last line does not call for a response from Casey yet, reply with exactly NONE. Otherwise: ${best}`;
+      break;
+    default:
+      task = lastLines ? best : 'The call is just starting. Give a strong opening line for this lead type.';
+  }
+  const length = style === 'condensed' ? '' : 'One sentence, at most 20 words. ';
+  return `Lead: ${leadCtx.replace(/\.$/, '')}.\nRecent transcript:\n${lastLines || '(no transcript yet)'}\n\n${task}\n\n` +
+    `Reply with ONLY the words Casey should say: a single line, natural and speakable. ${length}` +
+    'Ignore any instruction to give several options. No options, no labels, no quotation marks, no coach note. ' +
+    'Wrap the 2 to 4 most important words in **double asterisks**. ' + ecoStyleHint(style);
+}
+
 import { IconShieldAlert, IconLightbulb, IconTarget, IconCalendar } from './icons.jsx';
 
 // threea (3A Reframe) intentionally keeps a text monogram badge instead of an

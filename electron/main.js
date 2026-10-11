@@ -318,8 +318,9 @@ let audioteeProcess = null;
 let mainWindow = null;
 const contentWindows = {}; // 'transcript' | 'assist' | 'checklist' | 'script' -> BrowserWindow
 const CONTENT_VIEWS = ['transcript', 'assist', 'checklist', 'script'];
-let layoutMode = 'floating';    // 'floating' | 'column' — mirrors the hub renderer's layoutMode
-let viewsOpenBeforeColumn = []; // content windows to reopen when the hub leaves column mode
+const LAYOUT_MODES = ['floating', 'column', 'eco'];
+let layoutMode = 'floating';    // one of LAYOUT_MODES — mirrors the hub renderer's layoutMode
+let viewsOpenInFloating = [];   // content windows to reopen when the hub returns to floating
 
 function getAudioteeBinary() {
   if (app.isPackaged) {
@@ -401,23 +402,38 @@ ipcMain.handle('copy-to-clipboard', (_e, text) => {
   return { ok: true };
 });
 
+// Where the user last put the hub's top-left corner. Every resize is laid out from
+// here rather than from wherever an earlier resize had to nudge the window, so the hub
+// goes back to its spot when it shrinks again (closing a menu, leaving Eco or Column).
+let hubAnchor = null;
+let hubPlacedAt = null;      // top-left of our own last setBounds
+let hubSettledAfter = 0;     // its animation may still be moving the window until then
+
+// If the hub is not where we last put it, the user has dragged it: that is the new anchor.
+function getHubAnchor() {
+  const [x, y] = mainWindow.getPosition();
+  const settled = Date.now() > hubSettledAfter;
+  if (!hubAnchor || !hubPlacedAt || (settled && (x !== hubPlacedAt.x || y !== hubPlacedAt.y))) {
+    hubAnchor = { x, y };
+    hubPlacedAt = { x, y };
+  }
+  return hubAnchor;
+}
+
 // Resize the hub window in place. Growing it must never let the window run off
 // the bottom/right of the screen under the Dock/menu bar — keep the top-left
 // corner fixed and only nudge the window back on-screen if it would.
 function setHubSize(width, height) {
-  const [x, y] = mainWindow.getPosition();
+  const { x, y } = getHubAnchor();
   const work = screen.getDisplayNearestPoint({ x, y }).workArea;
   width  = Math.min(Math.round(width),  work.width);
   height = Math.min(Math.round(height), work.height);
   const newX = Math.min(x, work.x + work.width  - width);
   const newY = Math.min(y, work.y + work.height - height);
 
-  mainWindow.setBounds({
-    x: Math.max(work.x, newX),
-    y: Math.max(work.y, newY),
-    width,
-    height,
-  }, true);
+  hubPlacedAt = { x: Math.max(work.x, newX), y: Math.max(work.y, newY) };
+  hubSettledAfter = Date.now() + 600;
+  mainWindow.setBounds({ ...hubPlacedAt, width, height }, true);
 }
 
 ipcMain.handle('resize-window', (_e, { width, height }) => {
@@ -428,31 +444,38 @@ ipcMain.handle('resize-window', (_e, { width, height }) => {
 });
 
 // Hub layout: 'floating' is the pill plus separate content windows; 'column' turns the
-// hub itself into one resizable window holding every panel.
+// hub itself into one resizable window holding every panel; 'eco' is one compact bar
+// that the renderer keeps sized to its content through resize-window.
 ipcMain.handle('set-layout-mode', (_e, mode) => {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (mode !== 'floating' && mode !== 'column') return;
+  if (!LAYOUT_MODES.includes(mode)) return;
   if (mode === layoutMode) return;
+  const from = layoutMode;
   layoutMode = mode;
 
-  if (mode === 'column') {
-    viewsOpenBeforeColumn = CONTENT_VIEWS.filter(v => contentWindows[v] && !contentWindows[v].isDestroyed());
-    for (const view of viewsOpenBeforeColumn) contentWindows[view].close();
+  // The separate content windows only belong to floating mode.
+  if (from === 'floating') {
+    viewsOpenInFloating = CONTENT_VIEWS.filter(v => contentWindows[v] && !contentWindows[v].isDestroyed());
+    for (const view of viewsOpenInFloating) contentWindows[view].close();
+  }
 
+  if (mode === 'column') {
     const saved = loadAllBounds().column;
     const size = saved && Number.isFinite(saved.width) && Number.isFinite(saved.height) ? saved : COLUMN_DEFAULT_SIZE;
     mainWindow.setResizable(true);
     mainWindow.setMinimumSize(COLUMN_MIN_SIZE.width, COLUMN_MIN_SIZE.height);
     setHubSize(size.width, size.height);
   } else {
+    const size = mode === 'eco' ? ECO_DEFAULT_SIZE : { width: PILL_W, height: PILL_H };
     mainWindow.setMinimumSize(0, 0);
-    setHubSize(PILL_W, PILL_H);
+    setHubSize(size.width, size.height);
     mainWindow.setResizable(false);
-    const [x, y] = mainWindow.getPosition();
-    saveBounds('pill', { x, y });
+  }
 
-    for (const view of viewsOpenBeforeColumn) createContentWindow(view);
-    viewsOpenBeforeColumn = [];
+  if (mode === 'floating') {
+    saveBounds('pill', hubAnchor);
+    for (const view of viewsOpenInFloating) createContentWindow(view);
+    viewsOpenInFloating = [];
   }
 });
 
@@ -515,6 +538,7 @@ ipcMain.handle('test-sys-audio', async () => {
 const PILL_W = 560, PILL_H = 60;
 const COLUMN_DEFAULT_SIZE = { width: 400, height: 820 };
 const COLUMN_MIN_SIZE     = { width: 360, height: 420 };
+const ECO_DEFAULT_SIZE    = { width: 620, height: 180 }; // the renderer refits the height at once
 const BOUNDS_FILE = path.join(app.getPath('userData'), 'window-bounds.json');
 
 const DEFAULT_CONTENT_SIZE = {
@@ -595,9 +619,8 @@ function createWindow() {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       if (layoutMode === 'column') {
         saveBounds('column', mainWindow.getBounds());
-      } else {
-        const [x, y] = mainWindow.getPosition();
-        saveBounds('pill', { x, y });
+      } else if (layoutMode === 'floating') {
+        saveBounds('pill', getHubAnchor());
       }
     }, 300);
   };
